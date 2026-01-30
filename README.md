@@ -19,7 +19,7 @@
 
 *⚠️ **Alpha** — Expect breaking changes and rapid iteration ⚠️*
 
-<!-- Add demo GIF here -->
+<img src="assets/BlinkEdit.gif" alt="blink-edit demo">
 
 </div>
 
@@ -202,6 +202,16 @@ require("blink-edit").setup({
 
   ui = {
     progress = true,              -- Show "thinking..." indicator
+    suppress_lsp_floats = true,   -- Hide LSP floats while prediction visible
+  },
+
+  prefetch = {
+    enabled = false,              -- Speculative prefetch (uses extra tokens)
+    strategy = "n-1",             -- Prefetch when one hunk remains
+  },
+
+  normal_mode = {
+    enabled = false,              -- Trigger predictions on idle in normal mode
   },
 
   accept_key = "<Tab>",           -- Key to accept prediction
