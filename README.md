@@ -214,6 +214,8 @@ require("blink-edit").setup({
     enabled = false,              -- Trigger predictions on idle in normal mode
   },
 
+  debounce_ms = 100,              -- Delay (ms) before sending prediction request
+
   accept_key = "<Tab>",           -- Key to accept prediction
   reject_key = "<Esc>",           -- Key to reject prediction
 })

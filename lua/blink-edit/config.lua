@@ -167,7 +167,7 @@ local defaults = {
   ---------------------------------------------------------
   -- Timing
   ---------------------------------------------------------
-  debounce_ms = 50, -- Delay before sending request
+  debounce_ms = 100, -- Delay before sending request
   cancel_in_flight = true, -- Cancel TCP when new request queued (faster iteration)
 
   ---------------------------------------------------------
