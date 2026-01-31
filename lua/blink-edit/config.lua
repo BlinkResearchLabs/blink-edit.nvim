@@ -56,6 +56,20 @@
 ---@field same_file BlinkEditContextSameFileConfig
 ---@field history BlinkEditHistoryConfig
 
+---@class BlinkEditInsertKeymapsConfig
+---@field accept string|nil
+---@field accept_line string|nil
+---@field clear string|nil
+---@field reject string|nil
+
+---@class BlinkEditNormalKeymapsConfig
+---@field accept string|nil
+---@field accept_line string|nil
+
+---@class BlinkEditKeymapsConfig
+---@field insert BlinkEditInsertKeymapsConfig
+---@field normal BlinkEditNormalKeymapsConfig
+
 ---@class BlinkEditConfig
 ---@field llm BlinkEditLLMConfig
 ---@field backends BlinkEditBackendsConfig
@@ -63,8 +77,7 @@
 ---@field debounce_ms number
 ---@field cancel_in_flight boolean
 ---@field context BlinkEditContextConfig
----@field accept_key string
----@field reject_key string
+---@field keymaps BlinkEditKeymapsConfig
 ---@field highlight table
 ---@field providers table
 ---@field enabled_filetypes string[]|nil
@@ -210,10 +223,21 @@ local defaults = {
   ---------------------------------------------------------
   -- Keymaps
   ---------------------------------------------------------
-  accept_key = "<Tab>", -- Accept prediction
-  reject_key = "<Esc>", -- Reject prediction
-  -- Tab only triggers when prediction is visible
-  -- Falls through to default Tab otherwise
+  keymaps = {
+    insert = {
+      accept = "<Tab>",        -- Accept next hunk
+      accept_line = "<C-j>",   -- Accept first line of multi-line hunk
+      clear = "<C-]>",         -- Dismiss ghost text (stay in insert mode)
+      reject = "<Esc>",        -- Reject and exit insert mode
+    },
+    normal = {
+      accept = "<Tab>",        -- Accept next hunk (only when normal_mode.enabled)
+      accept_line = "<C-j>",   -- Accept first line (only when normal_mode.enabled)
+      -- clear and reject not mapped in normal mode to avoid conflicts
+    },
+  },
+  -- Keys only trigger when prediction is visible
+  -- Falls through to default behavior otherwise
 
   ---------------------------------------------------------
   -- UI / Highlights

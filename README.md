@@ -108,8 +108,10 @@ require("blink-edit").setup({
 2. **Start typing** in Insert mode. Predictions will appear as ghost text.
 
 3. **Control:**
-   - `<Tab>` to **Accept**
-   - `<Esc>` to **Reject**
+   - `<Tab>` to **Accept** the next hunk
+   - `<C-j>` to **Accept Line** (first line of multi-line hunk)
+   - `<C-]>` to **Clear** (dismiss without leaving insert mode)
+   - `<Esc>` to **Reject** and exit insert mode
    - `:BlinkEditStatus` to check server health
 
 ---
@@ -216,8 +218,18 @@ require("blink-edit").setup({
 
   debounce_ms = 100,              -- Delay (ms) before sending prediction request
 
-  accept_key = "<Tab>",           -- Key to accept prediction
-  reject_key = "<Esc>",           -- Key to reject prediction
+  keymaps = {
+    insert = {
+      accept = "<Tab>",           -- Accept next hunk
+      accept_line = "<C-j>",      -- Accept first line of multi-line hunk
+      clear = "<C-]>",            -- Dismiss ghost text (stay in insert mode)
+      reject = "<Esc>",           -- Reject and exit insert mode
+    },
+    normal = {
+      accept = "<Tab>",           -- Accept next hunk (when normal_mode.enabled)
+      accept_line = "<C-j>",      -- Accept first line (when normal_mode.enabled)
+    },
+  },
 })
 ```
 
@@ -227,19 +239,44 @@ require("blink-edit").setup({
 
 ## ⌨️ Keymaps & Commands
 
-| Key | Action |
-|-----|--------|
-| `<Tab>` | **Accept** prediction |
-| `<Esc>` | **Reject** prediction |
+### Insert Mode (always active)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `<Tab>` | **Accept** | Accept the next predicted hunk |
+| `<C-j>` | **Accept Line** | Accept first line of multi-line hunk |
+| `<C-]>` | **Clear** | Dismiss prediction (stay in insert mode) |
+| `<Esc>` | **Reject** | Reject prediction and exit insert mode |
+
+### Normal Mode (when `normal_mode.enabled = true`)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `<Tab>` | **Accept** | Accept the next predicted hunk |
+| `<C-j>` | **Accept Line** | Accept first line of multi-line hunk |
+
+> **Note:** `clear` and `reject` are not mapped in normal mode to avoid conflicts with standard Vim keybindings (`<C-]>` is tag jump, `<Esc>` is mode switching).
 
 > **Note:** If you use `blink.cmp` or `nvim-cmp`, the `<Tab>` keymap automatically checks if the completion menu is visible before accepting predictions.
 
 **Customization:**
 
+Keymaps are organized by mode and can be customized or disabled (set to `nil`):
+
 ```lua
 require("blink-edit").setup({
-  accept_key = "<C-y>",  -- Use Ctrl+y to accept
-  reject_key = "<C-n>",  -- Use Ctrl+n to reject
+  keymaps = {
+    insert = {
+      accept = "<C-y>",        -- Use Ctrl+y to accept
+      accept_line = "<C-j>",   -- Keep default
+      clear = nil,             -- Disable clear keymap
+      reject = "<C-n>",        -- Use Ctrl+n to reject
+    },
+    normal = {
+      accept = "<C-y>",        -- Match insert mode binding
+      accept_line = nil,       -- Disable in normal mode
+    },
+  },
 })
 ```
 
@@ -262,8 +299,10 @@ require("blink-edit").disable()       -- Disable predictions
 require("blink-edit").toggle()        -- Toggle predictions
 
 require("blink-edit").trigger()       -- Manually trigger a prediction
-require("blink-edit").accept()        -- Accept current prediction
-require("blink-edit").reject()        -- Reject current prediction
+require("blink-edit").accept()        -- Accept next hunk
+require("blink-edit").accept_line()   -- Accept first line of current hunk
+require("blink-edit").clear()         -- Clear prediction (stay in insert mode)
+require("blink-edit").reject()        -- Reject prediction
 
 require("blink-edit").status()        -- Get status table
 require("blink-edit").health_check()  -- Check backend health
@@ -329,7 +368,7 @@ Press `r` to refresh health, `q` or `<Esc>` to close.
 <details>
 <summary><strong>Tab conflicts with completion menu</strong></summary>
 
-We check for blink.cmp/nvim-cmp visibility, but you can change `accept_key` if needed.
+We check for blink.cmp/nvim-cmp visibility, but you can change `keymaps.accept` if needed.
 
 </details>
 
