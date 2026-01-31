@@ -1380,6 +1380,130 @@ function M.accept(bufnr)
   return true
 end
 
+--- Accept only the first line of the current hunk
+--- For multi-line hunks: accepts first line, keeps rest visible
+--- For single-line hunks: same as accept()
+--- For deletion hunks: accepts full deletion (can't partially delete)
+---@param bufnr number
+---@return boolean success
+function M.accept_line(bufnr)
+  local prediction = state.get_prediction(bufnr)
+  if not prediction then
+    return false
+  end
+
+  local snapshot_lines = prediction.snapshot_lines
+  local predicted_lines = prediction.predicted_lines
+  local window_start = prediction.window_start
+
+  if not snapshot_lines or not predicted_lines then
+    return false
+  end
+
+  local cursor_offset = get_cursor_offset(window_start, prediction.cursor)
+  local diff_result = diff.compute(snapshot_lines, predicted_lines)
+
+  if not diff_result.has_changes or #diff_result.hunks == 0 then
+    render.clear(bufnr)
+    return false
+  end
+
+  local next_hunk = find_next_hunk(diff_result.hunks, cursor_offset)
+  if not next_hunk then
+    -- No hunk at/below cursor, fall back to normal accept
+    return M.accept(bufnr)
+  end
+
+  -- For replacement hunks, check if first line already matches snapshot
+  -- (this happens when vim.diff doesn't align lines as we expect after partial accept)
+  if next_hunk.type == "replacement" and next_hunk.count_old == 1 and next_hunk.count_new > 1 then
+    local snapshot_line = snapshot_lines[next_hunk.start_old]
+    local first_new = next_hunk.new_lines and next_hunk.new_lines[1]
+    if snapshot_line and first_new and snapshot_line == first_new then
+      -- First line already accepted, convert to insertion of remaining lines
+      next_hunk = {
+        type = "insertion",
+        start_old = next_hunk.start_old,
+        count_old = 0,
+        start_new = next_hunk.start_new + 1,
+        count_new = next_hunk.count_new - 1,
+        old_lines = {},
+        new_lines = vim.list_slice(next_hunk.new_lines, 2),
+      }
+    end
+  end
+
+  -- For deletion or single-line hunks, use normal accept
+  if next_hunk.type == "deletion" or next_hunk.count_new <= 1 then
+    return M.accept(bufnr)
+  end
+
+  -- Multi-line: create partial hunk with only first new line
+  local partial_hunk = {
+    start_old = next_hunk.start_old,
+    count_old = math.min(next_hunk.count_old, 1),
+    start_new = next_hunk.start_new,
+    count_new = 1,
+    type = next_hunk.type,
+    old_lines = next_hunk.old_lines and #next_hunk.old_lines > 0 and { next_hunk.old_lines[1] } or {},
+    new_lines = { next_hunk.new_lines[1] },
+  }
+
+  state.set_suppress_trigger(bufnr, true)
+  local partial_predicted = apply_hunk_lines(snapshot_lines, partial_hunk)
+  local partial_prediction = {
+    predicted_lines = partial_predicted,
+    snapshot_lines = snapshot_lines,
+    window_start = prediction.window_start,
+    window_end = prediction.window_end,
+    response_text = prediction.response_text,
+    created_at = prediction.created_at,
+    cursor = prediction.cursor,
+  }
+
+  local success, merged_lines = render.apply_with_prediction(bufnr, partial_prediction)
+  if not success then
+    state.set_suppress_trigger(bufnr, false)
+    return false
+  end
+
+  -- Position cursor at end of inserted line
+  local end_line = window_start + partial_hunk.start_new - 1
+  local end_col = #(partial_hunk.new_lines[1] or "")
+
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  end_line = math.max(1, math.min(end_line, line_count))
+  local ok, line_data = pcall(vim.api.nvim_buf_get_lines, bufnr, end_line - 1, end_line, false)
+  end_col = math.min(end_col, #((ok and line_data[1]) or ""))
+
+  vim.api.nvim_win_set_cursor(0, { end_line, end_col })
+
+  prediction.snapshot_lines = merged_lines or partial_predicted
+  prediction.cursor = { end_line, end_col }
+  state.set_prediction(bufnr, prediction)
+
+  cancel_debounce(bufnr)
+  render.show(bufnr, prediction)
+
+  if vim.g.blink_edit_debug then
+    log.debug("Accepted first line of hunk")
+  end
+
+  return true
+end
+
+--- Clear prediction without leaving insert mode (soft dismiss)
+--- Unlike reject(), this doesn't cancel in-flight requests
+---@param bufnr number
+function M.clear(bufnr)
+  cancel_debounce(bufnr)
+  render.clear(bufnr)
+
+  if vim.g.blink_edit_debug then
+    log.debug("Prediction cleared (soft dismiss)")
+  end
+end
+
 --- Reject the current prediction
 ---@param bufnr number
 function M.reject(bufnr)

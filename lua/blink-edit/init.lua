@@ -46,6 +46,9 @@ function M.setup(user_config)
   -- Setup keymaps
   M._setup_keymaps()
 
+  -- Setup key listeners
+  M._setup_key_listeners()
+
   -- Setup LSP float suppression (optional)
   M._setup_lsp_suppression()
 
@@ -111,39 +114,121 @@ end
 --- Setup keymaps for accepting/rejecting predictions
 function M._setup_keymaps()
   local cfg = config.get()
+  local km = cfg.keymaps or {}
+  local insert_km = km.insert or {}
+  local normal_km = km.normal or {}
+  local normal_mode_enabled = cfg.normal_mode and cfg.normal_mode.enabled
 
-  -- Accept prediction with Tab
-  -- Uses vim.schedule() to defer buffer modification outside textlock
-  vim.keymap.set("i", cfg.accept_key, function()
-    -- Priority 1: Accept our prediction
+  -- ==========================================================================
+  -- Insert Mode Keymaps
+  -- ==========================================================================
+
+  -- Accept prediction (default: Tab)
+  if insert_km.accept then
+    vim.keymap.set("i", insert_km.accept, function()
+      -- Priority 1: Accept our prediction
+      if M.has_prediction() then
+        vim.schedule(function()
+          M.accept()
+        end)
+        return ""
+      end
+
+      -- Priority 2: Let completion plugins handle the key
+      if M._completion_menu_visible() then
+        return insert_km.accept
+      end
+
+      -- Default: pass through
+      return insert_km.accept
+    end, { expr = true, noremap = true, desc = "Accept blink-edit prediction" })
+  end
+
+  -- Accept first line of hunk (default: C-j)
+  if insert_km.accept_line then
+    vim.keymap.set("i", insert_km.accept_line, function()
+      if M.has_prediction() then
+        vim.schedule(function()
+          M.accept_line()
+        end)
+        return ""
+      end
+      return insert_km.accept_line
+    end, { expr = true, noremap = true, desc = "Accept first line of blink-edit prediction" })
+  end
+
+  -- Clear prediction without leaving insert mode (default: C-])
+  if insert_km.clear then
+    vim.keymap.set("i", insert_km.clear, function()
+      if M.has_prediction() then
+        vim.schedule(function()
+          M.clear()
+        end)
+        return ""
+      end
+      return insert_km.clear
+    end, { expr = true, noremap = true, desc = "Clear blink-edit prediction" })
+  end
+
+  -- Reject prediction (default: Esc)
+  if insert_km.reject then
+    vim.keymap.set("i", insert_km.reject, function()
+      if M.has_prediction() then
+        vim.schedule(function()
+          M.reject()
+        end)
+        return "" -- Consume the key
+      end
+      -- Fall through to default behavior
+      return insert_km.reject
+    end, { expr = true, noremap = true, desc = "Reject blink-edit prediction" })
+  end
+
+  -- ==========================================================================
+  -- Normal Mode Keymaps (only when normal_mode.enabled)
+  -- ==========================================================================
+
+  if normal_mode_enabled then
+    -- Accept prediction in normal mode
+    if normal_km.accept then
+      vim.keymap.set("n", normal_km.accept, function()
+        if M.has_prediction() then
+          vim.schedule(function()
+            M.accept()
+          end)
+          return ""
+        end
+        return normal_km.accept
+      end, { expr = true, noremap = true, desc = "Accept blink-edit prediction (normal)" })
+    end
+
+    -- Accept first line of hunk in normal mode
+    if normal_km.accept_line then
+      vim.keymap.set("n", normal_km.accept_line, function()
+        if M.has_prediction() then
+          vim.schedule(function()
+            M.accept_line()
+          end)
+          return ""
+        end
+        return normal_km.accept_line
+      end, { expr = true, noremap = true, desc = "Accept first line of blink-edit prediction (normal)" })
+    end
+  end
+end
+
+--- Setup key listeners for non-mapped keys (normal mode Esc to clear predictions)
+function M._setup_key_listeners()
+  -- Map Esc in normal mode to clear predictions when visible
+  -- Falls through to default Esc behavior when no prediction
+  vim.keymap.set("n", "<Esc>", function()
     if M.has_prediction() then
-      vim.schedule(function()
-        M.accept()
-      end)
+      M.reject()
       return ""
     end
-
-    -- Priority 2: Let completion plugins handle Tab
-    if M._completion_menu_visible() then
-      return cfg.accept_key
-    end
-
-    -- Default: Insert Tab
-    return cfg.accept_key
-  end, { expr = true, noremap = true, desc = "Accept blink-edit prediction" })
-
-  -- Reject prediction with Esc
-  -- Uses vim.schedule() to defer buffer modification outside textlock
-  vim.keymap.set("i", cfg.reject_key, function()
-    if M.has_prediction() then
-      vim.schedule(function()
-        M.reject()
-      end)
-      return "" -- Consume the key
-    end
-    -- Fall through to default Esc behavior
-    return cfg.reject_key
-  end, { expr = true, noremap = true, desc = "Reject blink-edit prediction" })
+    -- Fall through to default Esc (clears search highlight, etc.)
+    return "<Esc>"
+  end, { expr = true, noremap = true, desc = "Clear blink-edit prediction or default Esc" })
 end
 
 local function cancel_normal_mode_timer()
@@ -464,6 +549,18 @@ function M.reject()
   engine.reject(bufnr)
 end
 
+--- Accept first line of current hunk
+function M.accept_line()
+  local bufnr = vim.api.nvim_get_current_buf()
+  engine.accept_line(bufnr)
+end
+
+--- Clear prediction without leaving insert mode
+function M.clear()
+  local bufnr = vim.api.nvim_get_current_buf()
+  engine.clear(bufnr)
+end
+
 --- Manually trigger a prediction
 function M.trigger()
   local bufnr = vim.api.nvim_get_current_buf()
@@ -545,6 +642,9 @@ end
 function M.reset()
   -- Clear autocmds
   pcall(vim.api.nvim_del_augroup_by_name, "BlinkEdit")
+
+  -- Remove normal mode Esc keymap
+  pcall(vim.keymap.del, "n", "<Esc>")
 
   -- Cleanup engine
   engine.cleanup()

@@ -15,7 +15,47 @@ local ns = vim.api.nvim_create_namespace("blink-edit")
 ---@type table<number, number[]> Buffer -> list of extmark IDs
 local extmarks = {}
 
-local JUMP_TEXT = " ⇥ TAB "
+--- Format a key string for display
+---@param key string
+---@return string
+local function format_key_for_display(key)
+  if key == "<Tab>" then
+    return "Tab"
+  elseif key:match("^<C%-") then
+    -- <C-x> -> Ctrl+X
+    return key:gsub("^<C%-(.-)>$", "Ctrl+%1")
+  elseif key:match("^<M%-") then
+    -- <M-x> -> Alt+X
+    return key:gsub("^<M%-(.-)>$", "Alt+%1")
+  elseif key:match("^<S%-") then
+    -- <S-x> -> Shift+X
+    return key:gsub("^<S%-(.-)>$", "Shift+%1")
+  elseif key:match("^<.-") then
+    -- <key> -> key
+    return key:gsub("^<(.-)>$", "%1")
+  end
+  return key
+end
+
+--- Get the jump indicator text based on configured accept key and current mode
+---@return string
+local function get_jump_text()
+  local cfg = require("blink-edit.config").get()
+  local mode = vim.api.nvim_get_mode().mode
+
+  -- Determine which key to show based on current mode
+  local key
+  if mode == "n" and cfg.keymaps and cfg.keymaps.normal and cfg.keymaps.normal.accept then
+    key = cfg.keymaps.normal.accept
+  elseif cfg.keymaps and cfg.keymaps.insert and cfg.keymaps.insert.accept then
+    key = cfg.keymaps.insert.accept
+  else
+    key = "<Tab>"
+  end
+
+  local display_key = format_key_for_display(key)
+  return " -> " .. display_key .. " "
+end
 
 -- =============================================================================
 -- Display Functions (one per hunk type)
@@ -211,9 +251,11 @@ local function show_jump_indicator(bufnr, hunk, window_start, extmark_list)
     return
   end
 
+  local jump_text = get_jump_text()
+
   -- Render as a virtual line below the target hunk
   local mark_id = vim.api.nvim_buf_set_extmark(bufnr, ns, anchor_line_0, 0, {
-    virt_lines = { { { JUMP_TEXT, "BlinkEditJump" } } },
+    virt_lines = { { { jump_text, "BlinkEditJump" } } },
     virt_lines_above = false, -- Show below the anchor line
   })
   table.insert(extmark_list, mark_id)
