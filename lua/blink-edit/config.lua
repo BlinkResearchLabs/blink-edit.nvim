@@ -95,6 +95,7 @@
 
 ---@class BlinkEditNormalModeConfig
 ---@field enabled boolean
+---@field debounce_ms number|nil
 
 local M = {}
 
@@ -267,6 +268,7 @@ local defaults = {
   ---------------------------------------------------------
   normal_mode = {
     enabled = false,
+    debounce_ms = 200,
   },
 
   ---------------------------------------------------------
@@ -488,6 +490,14 @@ local function validate_config(cfg)
   if cfg.normal_mode then
     if type(cfg.normal_mode.enabled) ~= "boolean" then
       error("[blink-edit] normal_mode.enabled must be a boolean")
+    end
+    if cfg.normal_mode.debounce_ms ~= nil then
+      if type(cfg.normal_mode.debounce_ms) ~= "number" then
+        error("[blink-edit] normal_mode.debounce_ms must be a number")
+      end
+      if cfg.normal_mode.debounce_ms <= 0 then
+        error("[blink-edit] normal_mode.debounce_ms must be > 0")
+      end
     end
   end
 

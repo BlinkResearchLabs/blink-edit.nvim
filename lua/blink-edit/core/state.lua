@@ -146,6 +146,7 @@ local function get_or_create(bufnr)
       selection = nil,
       history_files = nil,
       suppress_next_trigger = false,
+      suppress_next_normal_move = false,
       invalid_response = nil,
       prefetch = nil,
     }
@@ -430,6 +431,30 @@ function M.consume_suppress_trigger(bufnr)
   local state = buffers[bufnr]
   if state and state.suppress_next_trigger then
     state.suppress_next_trigger = false
+    return true
+  end
+  return false
+end
+
+-- =============================================================================
+-- Normal-mode Cursor Suppression
+-- =============================================================================
+
+--- Suppress the next CursorMoved in normal mode
+---@param bufnr number
+---@param value boolean
+function M.set_suppress_normal_move(bufnr, value)
+  local state = get_or_create(bufnr)
+  state.suppress_next_normal_move = value and true or false
+end
+
+--- Consume the suppress flag (returns true once)
+---@param bufnr number
+---@return boolean
+function M.consume_suppress_normal_move(bufnr)
+  local state = buffers[bufnr]
+  if state and state.suppress_next_normal_move then
+    state.suppress_next_normal_move = false
     return true
   end
   return false
