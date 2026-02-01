@@ -473,7 +473,7 @@ end
 ---@return boolean
 function M.has_lsp_unsupported_warned(bufnr, method)
   local state = buffers[bufnr]
-  return state and state.lsp_unsupported_warned and state.lsp_unsupported_warned[method] == true or false
+  return state ~= nil and state.lsp_unsupported_warned ~= nil and state.lsp_unsupported_warned[method] == true
 end
 
 --- Mark an unsupported LSP method as warned for this buffer
