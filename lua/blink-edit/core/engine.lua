@@ -475,6 +475,14 @@ local function get_hunk_anchor_line(hunk)
   return hunk.start_old
 end
 
+local function set_cursor_with_suppress(bufnr, line, col)
+  local mode = vim.api.nvim_get_mode().mode
+  if mode:sub(1, 1) == "n" then
+    state.set_suppress_normal_move(bufnr, true)
+  end
+  vim.api.nvim_win_set_cursor(0, { line, col })
+end
+
 --- Build a visible-only accept queue from the current prediction
 ---@param prediction BlinkEditPrediction
 ---@return { kind: string, anchor_line: number, text: string|nil }[]|nil
@@ -1359,7 +1367,7 @@ function M.accept(bufnr)
       else
         cursor_col = #(last_text or "")
       end
-      vim.api.nvim_win_set_cursor(0, { cursor_line, cursor_col })
+      set_cursor_with_suppress(bufnr, cursor_line, cursor_col)
       prediction.cursor = { cursor_line, cursor_col }
     end
 
@@ -1536,7 +1544,7 @@ function M.accept(bufnr)
     end_col = 0
   end
 
-  vim.api.nvim_win_set_cursor(0, { end_line, end_col })
+  set_cursor_with_suppress(bufnr, end_line, end_col)
   prediction.cursor = { end_line, end_col }
   state.set_prediction(bufnr, prediction)
 
@@ -1689,7 +1697,7 @@ function M.accept_line(bufnr)
     cursor_col = #(applied_text or "")
   end
 
-  vim.api.nvim_win_set_cursor(0, { cursor_line, cursor_col })
+  set_cursor_with_suppress(bufnr, cursor_line, cursor_col)
   prediction.cursor = { cursor_line, cursor_col }
   state.set_prediction(bufnr, prediction)
   cancel_debounce(bufnr)

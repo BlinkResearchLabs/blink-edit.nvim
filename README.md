@@ -214,6 +214,7 @@ require("blink-edit").setup({
 
   normal_mode = {
     enabled = false,              -- Trigger predictions on idle in normal mode
+    debounce_ms = 200,            -- Normal-mode debounce (ms)
   },
 
   debounce_ms = 100,              -- Delay (ms) before sending prediction request

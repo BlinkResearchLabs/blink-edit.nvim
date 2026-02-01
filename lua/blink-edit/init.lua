@@ -368,7 +368,8 @@ local function start_normal_mode_timer(bufnr)
   cancel_normal_mode_timer()
   local timer = uv.new_timer()
   normal_mode_timer = timer
-  timer:start(cfg.debounce_ms, 0, function()
+  local delay = (cfg.normal_mode and cfg.normal_mode.debounce_ms) or cfg.debounce_ms
+  timer:start(delay, 0, function()
     if not timer:is_closing() then
       timer:stop()
       timer:close()
@@ -621,15 +622,19 @@ function M._on_cursor_moved_normal(bufnr)
     return
   end
 
-  engine.cancel_prefetch(bufnr)
-
-  if M.has_prediction() then
+  if state.consume_suppress_normal_move(bufnr) then
     return
   end
+
+  engine.cancel_prefetch(bufnr)
 
   local mode = vim.api.nvim_get_mode().mode
   if mode ~= "n" then
     return
+  end
+
+  if M.has_prediction() then
+    engine.reject(bufnr)
   end
 
   -- Skip special buffer types
