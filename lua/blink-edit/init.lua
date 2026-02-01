@@ -18,6 +18,7 @@ local uv = vim.uv or vim.loop
 ---@type boolean
 local initialized = false
 local normal_mode_timer = nil
+local esc_wrappers = {}
 local lsp_wrapped = false
 local original_hover = nil
 local original_signature = nil
@@ -46,8 +47,8 @@ function M.setup(user_config)
   -- Setup keymaps
   M._setup_keymaps()
 
-  -- Setup key listeners
-  M._setup_key_listeners()
+  -- Setup visibility listeners
+  M._setup_visibility_listeners()
 
   -- Setup LSP float suppression (optional)
   M._setup_lsp_suppression()
@@ -217,18 +218,138 @@ function M._setup_keymaps()
   end
 end
 
---- Setup key listeners for non-mapped keys (normal mode Esc to clear predictions)
-function M._setup_key_listeners()
-  -- Map Esc in normal mode to clear predictions when visible
-  -- Falls through to default Esc behavior when no prediction
+local function get_buf_esc_map(bufnr)
+  if vim.keymap and vim.keymap.get then
+    local maps = vim.keymap.get("n", "<Esc>", { buffer = bufnr })
+    if maps and #maps > 0 then
+      return maps[1]
+    end
+    return nil
+  end
+
+  local ok, maps = pcall(vim.api.nvim_buf_get_keymap, bufnr, "n")
+  if not ok or not maps then
+    return nil
+  end
+
+  for _, map in ipairs(maps) do
+    if map.lhs == "<Esc>" then
+      return {
+        lhs = map.lhs,
+        rhs = map.rhs,
+        expr = map.expr == 1 or map.expr == true,
+        noremap = map.noremap == 1 or map.noremap == true,
+        silent = map.silent == 1 or map.silent == true,
+        nowait = map.nowait == 1 or map.nowait == true,
+      }
+    end
+  end
+
+  return nil
+end
+
+local function restore_buf_esc_map(bufnr, map)
+  if not map then
+    return
+  end
+
+  local rhs = map.callback or map.rhs
+  if not rhs then
+    return
+  end
+
+  local opts = {
+    buffer = bufnr,
+    expr = map.expr == true,
+    noremap = map.noremap == true,
+    silent = map.silent == true,
+    nowait = map.nowait == true,
+  }
+
+  if map.script ~= nil then
+    opts.script = map.script
+  end
+  if map.desc then
+    opts.desc = map.desc
+  end
+  if map.replace_keycodes ~= nil then
+    opts.replace_keycodes = map.replace_keycodes
+  end
+
+  vim.keymap.set("n", "<Esc>", rhs, opts)
+end
+
+local function remove_esc_wrapper(bufnr)
+  local entry = esc_wrappers[bufnr]
+  if not entry then
+    return
+  end
+
+  pcall(vim.keymap.del, "n", "<Esc>", { buffer = bufnr })
+  if entry.original then
+    restore_buf_esc_map(bufnr, entry.original)
+  end
+  esc_wrappers[bufnr] = nil
+end
+
+local function remove_all_esc_wrappers()
+  for bufnr, _ in pairs(esc_wrappers) do
+    remove_esc_wrapper(bufnr)
+  end
+end
+
+local function install_esc_wrapper(bufnr)
+  local cfg = config.get()
+  if not (cfg.normal_mode and cfg.normal_mode.enabled) then
+    return
+  end
+
+  if esc_wrappers[bufnr] then
+    return
+  end
+
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  local original = get_buf_esc_map(bufnr)
+  esc_wrappers[bufnr] = { original = original }
+
   vim.keymap.set("n", "<Esc>", function()
     if M.has_prediction() then
       M.reject()
-      return ""
     end
-    -- Fall through to default Esc (clears search highlight, etc.)
-    return "<Esc>"
-  end, { expr = true, noremap = true, desc = "Clear blink-edit prediction or default Esc" })
+
+    remove_esc_wrapper(bufnr)
+
+    local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+    vim.api.nvim_feedkeys(esc, "m", false)
+    return ""
+  end, { expr = true, noremap = true, silent = true, buffer = bufnr, desc = "Clear blink-edit prediction" })
+end
+
+--- Setup visibility listeners for ephemeral Esc handling
+function M._setup_visibility_listeners()
+  local cfg = config.get()
+
+  remove_all_esc_wrappers()
+
+  if not (cfg.normal_mode and cfg.normal_mode.enabled) then
+    render.set_visibility_listeners(nil)
+    return
+  end
+
+  render.set_visibility_listeners({
+    on_show = function(bufnr)
+      if vim.g.blink_edit_enabled == false then
+        return
+      end
+      install_esc_wrapper(bufnr)
+    end,
+    on_clear = function(bufnr)
+      remove_esc_wrapper(bufnr)
+    end,
+  })
 end
 
 local function cancel_normal_mode_timer()
@@ -371,6 +492,7 @@ function M._setup_autocmds()
   vim.api.nvim_create_autocmd("BufDelete", {
     group = augroup,
     callback = function(args)
+      remove_esc_wrapper(args.buf)
       state.clear(args.buf)
     end,
     desc = "Cleanup blink-edit state on buffer delete",
@@ -577,6 +699,7 @@ end
 --- Enable blink-edit
 function M.enable()
   vim.g.blink_edit_enabled = true
+  M._setup_visibility_listeners()
   log.info("Enabled")
 end
 
@@ -584,6 +707,8 @@ end
 function M.disable()
   vim.g.blink_edit_enabled = false
   cancel_normal_mode_timer()
+  render.set_visibility_listeners(nil)
+  remove_all_esc_wrappers()
   M.reject()
   log.info("Disabled")
 end
@@ -643,8 +768,8 @@ function M.reset()
   -- Clear autocmds
   pcall(vim.api.nvim_del_augroup_by_name, "BlinkEdit")
 
-  -- Remove normal mode Esc keymap
-  pcall(vim.keymap.del, "n", "<Esc>")
+  render.set_visibility_listeners(nil)
+  remove_all_esc_wrappers()
 
   -- Cleanup engine
   engine.cleanup()
