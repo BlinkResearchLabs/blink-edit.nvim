@@ -403,13 +403,13 @@ vim.g.blink_edit_debug = 2      -- Verbose (prompts + responses)
 
 ```bash
 # Download and run directly
-llama-server -hf sweepai/sweep-next-edit-1.5b-GGUF --port 8000
+llama-server -hf sweepai/sweep-next-edit-1.5b --port 8000
 
 # Or download manually first
-huggingface-cli download sweepai/sweep-next-edit-1.5b-GGUF \
-  sweep-next-edit-1.5b.q8_0.gguf --local-dir ./models
+huggingface-cli download sweepai/sweep-next-edit-1.5b \
+  sweep-next-edit-1.5b.q8_0.v2.gguf --local-dir ./models
 
-llama-server -m ./models/sweep-next-edit-1.5b.q8_0.gguf --port 8000
+llama-server -m ./models/sweep-next-edit-1.5b.q8_0.v2.gguf --port 8000
 ```
 
 *Config:*
