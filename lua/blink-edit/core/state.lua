@@ -32,6 +32,8 @@ local log = require("blink-edit.log")
 ---@field cursor_after { [1]: number, [2]: number }|nil Cursor position after applying (completion)
 ---@field cursor { [1]: number, [2]: number } Cursor position when prediction was made
 ---@field allow_fallback boolean|nil
+---@field accept_queue { kind: string, anchor_line: number, text: string|nil }[]|nil
+---@field accept_queue_delta number|nil
 
 ---@class BlinkEditPrefetch
 ---@field request_id number|nil

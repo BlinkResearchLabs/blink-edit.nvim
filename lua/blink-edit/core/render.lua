@@ -15,7 +15,59 @@ local ns = vim.api.nvim_create_namespace("blink-edit")
 ---@type table<number, number[]> Buffer -> list of extmark IDs
 local extmarks = {}
 
-local JUMP_TEXT = " ⇥ TAB "
+local visibility = { on_show = nil, on_clear = nil }
+
+function M.set_visibility_listeners(listeners)
+  if type(listeners) == "table" then
+    visibility.on_show = listeners.on_show
+    visibility.on_clear = listeners.on_clear
+  else
+    visibility.on_show = nil
+    visibility.on_clear = nil
+  end
+end
+
+--- Format a key string for display
+---@param key string
+---@return string
+local function format_key_for_display(key)
+  if key == "<Tab>" then
+    return "Tab"
+  elseif key:match("^<C%-") then
+    -- <C-x> -> Ctrl+X
+    return key:gsub("^<C%-(.-)>$", "Ctrl+%1")
+  elseif key:match("^<M%-") then
+    -- <M-x> -> Alt+X
+    return key:gsub("^<M%-(.-)>$", "Alt+%1")
+  elseif key:match("^<S%-") then
+    -- <S-x> -> Shift+X
+    return key:gsub("^<S%-(.-)>$", "Shift+%1")
+  elseif key:match("^<.-") then
+    -- <key> -> key
+    return key:gsub("^<(.-)>$", "%1")
+  end
+  return key
+end
+
+--- Get the jump indicator text based on configured accept key and current mode
+---@return string
+local function get_jump_text()
+  local cfg = require("blink-edit.config").get()
+  local mode = vim.api.nvim_get_mode().mode
+
+  -- Determine which key to show based on current mode
+  local key
+  if mode == "n" and cfg.keymaps and cfg.keymaps.normal and cfg.keymaps.normal.accept then
+    key = cfg.keymaps.normal.accept
+  elseif cfg.keymaps and cfg.keymaps.insert and cfg.keymaps.insert.accept then
+    key = cfg.keymaps.insert.accept
+  else
+    key = "<Tab>"
+  end
+
+  local display_key = format_key_for_display(key)
+  return " -> " .. display_key .. " "
+end
 
 -- =============================================================================
 -- Display Functions (one per hunk type)
@@ -211,9 +263,11 @@ local function show_jump_indicator(bufnr, hunk, window_start, extmark_list)
     return
   end
 
+  local jump_text = get_jump_text()
+
   -- Render as a virtual line below the target hunk
   local mark_id = vim.api.nvim_buf_set_extmark(bufnr, ns, anchor_line_0, 0, {
-    virt_lines = { { { JUMP_TEXT, "BlinkEditJump" } } },
+    virt_lines = { { { jump_text, "BlinkEditJump" } } },
     virt_lines_above = false, -- Show below the anchor line
   })
   table.insert(extmark_list, mark_id)
@@ -232,6 +286,10 @@ function M.clear(bufnr)
 
   -- Clear prediction state
   state.clear_prediction(bufnr)
+
+  if visibility.on_clear then
+    visibility.on_clear(bufnr)
+  end
 end
 
 --- Check if there's a visible prediction
@@ -265,6 +323,121 @@ function M.show(bufnr, prediction)
     return
   end
 
+  if prediction.accept_queue and #prediction.accept_queue > 0 then
+    local delta = prediction.accept_queue_delta or 0
+    local shown_count = 0
+    local summary = { insertions = 0, deletions = 0, replacements = 0 }
+    local first_hunk = nil
+
+    local current = nil
+    local groups = {}
+
+    local function flush_group()
+      if not current then
+        return
+      end
+      table.insert(groups, current)
+      current = nil
+    end
+
+    for _, entry in ipairs(prediction.accept_queue) do
+      local kind = entry.kind
+      local anchor = entry.anchor_line + delta
+      if anchor < 1 then
+        anchor = 1
+      end
+      if not current then
+        current = { kind = kind, anchor_line = anchor, lines = {} }
+      else
+        local can_merge = false
+        if kind == current.kind then
+          if kind == "insertion" then
+            can_merge = anchor == current.anchor_line
+          else
+            can_merge = anchor == current.anchor_line + #current.lines
+          end
+        end
+        if not can_merge then
+          flush_group()
+          current = { kind = kind, anchor_line = anchor, lines = {} }
+        end
+      end
+      table.insert(current.lines, entry.text or "")
+    end
+    flush_group()
+
+    for _, group in ipairs(groups) do
+      local hunk
+      if group.kind == "insertion" then
+        local start_old = group.anchor_line - 1
+        hunk = {
+          type = "insertion",
+          start_old = start_old,
+          count_old = 0,
+          start_new = start_old + 1,
+          count_new = #group.lines,
+          old_lines = {},
+          new_lines = group.lines,
+        }
+        summary.insertions = summary.insertions + 1
+        show_insertion(bufnr, hunk, window_start, extmarks[bufnr])
+      elseif group.kind == "deletion" then
+        hunk = {
+          type = "deletion",
+          start_old = group.anchor_line,
+          count_old = #group.lines,
+          start_new = group.anchor_line,
+          count_new = 0,
+          old_lines = {},
+          new_lines = {},
+        }
+        summary.deletions = summary.deletions + 1
+        show_deletion(bufnr, hunk, window_start, extmarks[bufnr])
+      elseif group.kind == "replacement" then
+        hunk = {
+          type = "replacement",
+          start_old = group.anchor_line,
+          count_old = #group.lines,
+          start_new = group.anchor_line,
+          count_new = #group.lines,
+          old_lines = {},
+          new_lines = group.lines,
+        }
+        summary.replacements = summary.replacements + 1
+        show_replacement(bufnr, hunk, window_start, extmarks[bufnr])
+      end
+
+      if hunk then
+        shown_count = shown_count + 1
+        if not first_hunk then
+          first_hunk = hunk
+        end
+      end
+    end
+
+    if first_hunk then
+      show_jump_indicator(bufnr, first_hunk, window_start, extmarks[bufnr])
+    end
+
+    if visibility.on_show and extmarks[bufnr] and #extmarks[bufnr] > 0 then
+      visibility.on_show(bufnr)
+    end
+
+    if vim.g.blink_edit_debug then
+      log.debug(
+        string.format(
+          "Showing ghost text: %d hunks shown, 0 skipped (ins=%d, del=%d, mod=%d, repl=%d)",
+          shown_count,
+          summary.insertions,
+          summary.deletions,
+          0,
+          summary.replacements
+        )
+      )
+    end
+    return
+  end
+
   -- Calculate cursor offset in window (1-indexed)
   local cursor_offset = 1
   if cursor then
@@ -289,7 +462,11 @@ function M.show(bufnr, prediction)
 
   for _, hunk in ipairs(diff_result.hunks) do
     -- Only show hunks at or below cursor position
-    if hunk.start_old >= cursor_offset then
+    local anchor = hunk.start_old
+    if hunk.type == "insertion" then
+      anchor = hunk.start_old + 1
+    end
+    if anchor >= cursor_offset then
       shown_count = shown_count + 1
       if not first_hunk then
         first_hunk = hunk
@@ -310,7 +487,7 @@ function M.show(bufnr, prediction)
           string.format(
             "Skipping hunk above cursor: %s at line %d (cursor at %d)",
             hunk.type,
-            hunk.start_old,
+            anchor,
             cursor_offset
           )
         )
@@ -337,6 +514,10 @@ function M.show(bufnr, prediction)
 
   if first_hunk then
     show_jump_indicator(bufnr, first_hunk, window_start, extmarks[bufnr])
+  end
+
+  if visibility.on_show and extmarks[bufnr] and #extmarks[bufnr] > 0 then
+    visibility.on_show(bufnr)
   end
 
   if vim.g.blink_edit_debug then

@@ -417,7 +417,11 @@ end
 ---@return DiffHunk|nil
 local function find_next_hunk(hunks, cursor_offset)
   for _, hunk in ipairs(hunks or {}) do
-    if hunk.start_old >= cursor_offset then
+    local anchor = hunk.start_old
+    if hunk.type == "insertion" then
+      anchor = hunk.start_old + 1
+    end
+    if anchor >= cursor_offset then
       return hunk
     end
   end
@@ -459,6 +463,138 @@ local function apply_hunk_lines(lines, hunk)
   end
 
   return result
+end
+
+--- Get a stable anchor line for hunk visibility/queue
+---@param hunk DiffHunk
+---@return number
+local function get_hunk_anchor_line(hunk)
+  if hunk.type == "insertion" then
+    return hunk.start_old + 1
+  end
+  return hunk.start_old
+end
+
+--- Build a visible-only accept queue from the current prediction
+---@param prediction BlinkEditPrediction
+---@return { kind: string, anchor_line: number, text: string|nil }[]|nil
+local function build_accept_queue(prediction)
+  local snapshot = prediction.snapshot_lines
+  local predicted = prediction.predicted_lines
+  if not snapshot or not predicted then
+    return nil
+  end
+
+  local cursor_offset = get_cursor_offset(prediction.window_start, prediction.cursor)
+  local diff_result = diff.compute(snapshot, predicted)
+  if not diff_result.has_changes or #diff_result.hunks == 0 then
+    return nil
+  end
+
+  local queue = {}
+
+  for _, hunk in ipairs(diff_result.hunks) do
+    local anchor = get_hunk_anchor_line(hunk)
+    if anchor < cursor_offset then
+      goto continue
+    end
+
+    if hunk.type == "insertion" then
+      local insert_anchor = hunk.start_old + 1
+      for _, line in ipairs(hunk.new_lines or {}) do
+        table.insert(queue, { kind = "insertion", anchor_line = insert_anchor, text = line })
+      end
+    elseif hunk.type == "deletion" then
+      for i = 1, hunk.count_old do
+        table.insert(queue, { kind = "deletion", anchor_line = hunk.start_old + i - 1 })
+      end
+    elseif hunk.type == "modification" then
+      for i = 1, hunk.count_old do
+        local old_line = (hunk.old_lines and hunk.old_lines[i]) or ""
+        local new_line = (hunk.new_lines and hunk.new_lines[i]) or ""
+        if old_line ~= new_line then
+          table.insert(queue, { kind = "replacement", anchor_line = hunk.start_old + i - 1, text = new_line })
+        end
+      end
+    elseif hunk.type == "replacement" then
+      local min_lines = math.min(hunk.count_old, hunk.count_new)
+      for i = 1, min_lines do
+        local old_line = (hunk.old_lines and hunk.old_lines[i]) or ""
+        local new_line = (hunk.new_lines and hunk.new_lines[i]) or ""
+        if old_line ~= new_line then
+          table.insert(queue, { kind = "replacement", anchor_line = hunk.start_old + i - 1, text = new_line })
+        end
+      end
+
+      if hunk.count_new > hunk.count_old then
+        local insert_anchor = hunk.start_old + min_lines
+        for i = min_lines + 1, hunk.count_new do
+          local new_line = (hunk.new_lines and hunk.new_lines[i]) or ""
+          table.insert(queue, { kind = "insertion", anchor_line = insert_anchor, text = new_line })
+        end
+      elseif hunk.count_old > hunk.count_new then
+        for i = min_lines + 1, hunk.count_old do
+          table.insert(queue, { kind = "deletion", anchor_line = hunk.start_old + i - 1 })
+        end
+      end
+    end
+
+    ::continue::
+  end
+
+  if #queue == 0 then
+    return nil
+  end
+
+  return queue
+end
+
+--- Apply a single queue entry and update snapshot
+---@param bufnr number
+---@param prediction BlinkEditPrediction
+---@param entry { kind: string, anchor_line: number, text: string|nil }
+---@param delta number
+---@return boolean success, number new_delta, number applied_line, string|nil applied_text
+local function apply_queue_entry(bufnr, prediction, entry, delta)
+  local snapshot = prediction.snapshot_lines
+  if not snapshot then
+    return false, delta, 0, nil
+  end
+
+  local effective_line = entry.anchor_line + delta
+  if effective_line < 1 then
+    effective_line = 1
+  end
+
+  if entry.kind == "insertion" then
+    if effective_line > #snapshot + 1 then
+      effective_line = #snapshot + 1
+    end
+    local text = entry.text or ""
+    local buf_line = prediction.window_start + effective_line - 1
+    vim.api.nvim_buf_set_lines(bufnr, buf_line - 1, buf_line - 1, false, { text })
+    table.insert(snapshot, effective_line, text)
+    return true, delta + 1, effective_line, text
+  elseif entry.kind == "deletion" then
+    if effective_line > #snapshot then
+      return false, delta, effective_line, nil
+    end
+    local buf_line = prediction.window_start + effective_line - 1
+    vim.api.nvim_buf_set_lines(bufnr, buf_line - 1, buf_line, false, {})
+    table.remove(snapshot, effective_line)
+    return true, delta - 1, effective_line, nil
+  elseif entry.kind == "replacement" then
+    if effective_line > #snapshot then
+      return false, delta, effective_line, nil
+    end
+    local text = entry.text or ""
+    local buf_line = prediction.window_start + effective_line - 1
+    vim.api.nvim_buf_set_lines(bufnr, buf_line - 1, buf_line, false, { text })
+    snapshot[effective_line] = text
+    return true, delta, effective_line, text
+  end
+
+  return false, delta, effective_line, nil
 end
 
 ---@param hunk DiffHunk
@@ -1186,6 +1322,101 @@ function M.accept(bufnr)
     return false
   end
 
+  if prediction.accept_queue and #prediction.accept_queue > 0 then
+    local queue = prediction.accept_queue
+    local delta = prediction.accept_queue_delta or 0
+    local last_line = nil
+    local last_text = nil
+    local last_kind = nil
+    local snapshot_before = vim.deepcopy(prediction.snapshot_lines or {})
+
+    for _, entry in ipairs(queue) do
+      state.set_suppress_trigger(bufnr, true)
+      local success
+      success, delta, last_line, last_text = apply_queue_entry(bufnr, prediction, entry, delta)
+      if not success then
+        return false
+      end
+      last_kind = entry.kind
+    end
+
+    prediction.accept_queue = nil
+    prediction.accept_queue_delta = nil
+    prediction.predicted_lines = prediction.snapshot_lines
+    state.set_prediction(bufnr, prediction)
+    cancel_debounce(bufnr)
+
+    if last_line then
+      local line_count = vim.api.nvim_buf_line_count(bufnr)
+      local cursor_line = prediction.window_start + last_line - 1
+      cursor_line = math.max(1, math.min(cursor_line, line_count))
+      local cursor_col = 0
+      if last_kind == "deletion" then
+        local ok, line_data = pcall(vim.api.nvim_buf_get_lines, bufnr, cursor_line - 1, cursor_line, false)
+        local line_content = (ok and line_data[1]) or ""
+        local prev_col = prediction.cursor and prediction.cursor[2] or 0
+        cursor_col = math.min(prev_col, #line_content)
+      else
+        cursor_col = #(last_text or "")
+      end
+      vim.api.nvim_win_set_cursor(0, { cursor_line, cursor_col })
+      prediction.cursor = { cursor_line, cursor_col }
+    end
+
+    local cfg = config.get()
+    if cfg.context.enabled and cfg.context.history.enabled and cfg.llm.provider ~= "zeta" then
+      local filepath = utils.normalize_filepath(vim.api.nvim_buf_get_name(bufnr))
+      local step_diff = diff.compute(snapshot_before, prediction.snapshot_lines or {})
+      for _, hunk in ipairs(step_diff.hunks) do
+        local original_text = table.concat(hunk.old_lines or {}, "\n")
+        local updated_text = table.concat(hunk.new_lines or {}, "\n")
+
+        local start_old = hunk.count_old > 0 and (prediction.window_start + hunk.start_old - 1) or nil
+        local end_old = hunk.count_old > 0 and (prediction.window_start + hunk.start_old + hunk.count_old - 2) or nil
+        local start_new = hunk.count_new > 0 and (prediction.window_start + hunk.start_new - 1) or nil
+        local end_new = hunk.count_new > 0 and (prediction.window_start + hunk.start_new + hunk.count_new - 2) or nil
+
+        local start_line = start_new or start_old
+        local end_line = end_new or end_old
+
+        state.add_to_history(bufnr, filepath, original_text, updated_text, {
+          start_line = start_line,
+          end_line = end_line,
+          start_line_old = start_old,
+          end_line_old = end_old,
+          start_line_new = start_new,
+          end_line_new = end_new,
+        })
+      end
+    end
+
+    if vim.g.blink_edit_debug then
+      log.debug("Accept: applied queued lines")
+    end
+
+    render.clear(bufnr)
+    state.clear_selection(bufnr)
+    state.update_baseline(bufnr)
+
+    local prefetch = state.get_prefetch(bufnr)
+    if prefetch and prefetch.prediction and prefetch.snapshot then
+      local snapshot_match =
+        prefetch.snapshot.window_start == prediction.window_start
+        and prefetch.snapshot.window_end == prediction.window_end
+        and utils.lines_equal(prefetch.snapshot.lines, prediction.snapshot_lines)
+      if snapshot_match then
+        state.set_prediction(bufnr, prefetch.prediction)
+        state.clear_prefetch(bufnr)
+        render.show(bufnr, prefetch.prediction)
+        return true
+      end
+    end
+
+    cancel_prefetch(bufnr)
+    M.trigger_force(bufnr)
+    return true
+  end
+
   local snapshot_lines = prediction.snapshot_lines
   local predicted_lines = prediction.predicted_lines
   local window_start = prediction.window_start
@@ -1378,6 +1609,111 @@ function M.accept(bufnr)
   end
 
   return true
+end
+
+--- Accept only the first line of the current hunk
+--- For multi-line hunks: accepts first line, keeps rest visible
+--- For single-line hunks: same as accept()
+--- For deletion hunks: accepts full deletion (can't partially delete)
+---@param bufnr number
+---@return boolean success
+function M.accept_line(bufnr)
+  local prediction = state.get_prediction(bufnr)
+  if not prediction then
+    return false
+  end
+  local function finalize_prediction()
+    if vim.g.blink_edit_debug then
+      log.debug("Accept line: last line applied")
+    end
+
+    render.clear(bufnr)
+    state.clear_selection(bufnr)
+    state.update_baseline(bufnr)
+
+    local prefetch = state.get_prefetch(bufnr)
+    if prefetch and prefetch.prediction and prefetch.snapshot then
+      local snapshot_match =
+        prefetch.snapshot.window_start == prediction.window_start
+        and prefetch.snapshot.window_end == prediction.window_end
+        and utils.lines_equal(prefetch.snapshot.lines, prediction.snapshot_lines)
+      if snapshot_match then
+        state.set_prediction(bufnr, prefetch.prediction)
+        state.clear_prefetch(bufnr)
+        render.show(bufnr, prefetch.prediction)
+        return true
+      end
+    end
+
+    cancel_prefetch(bufnr)
+    M.trigger_force(bufnr)
+    return true
+  end
+
+  if not prediction.accept_queue then
+    local queue = build_accept_queue(prediction)
+    if not queue or #queue == 0 then
+      return M.accept(bufnr)
+    end
+    prediction.accept_queue = queue
+    prediction.accept_queue_delta = 0
+    state.set_prediction(bufnr, prediction)
+  end
+
+  local entry = table.remove(prediction.accept_queue, 1)
+  if not entry then
+    prediction.accept_queue = nil
+    prediction.accept_queue_delta = nil
+    return finalize_prediction()
+  end
+
+  state.set_suppress_trigger(bufnr, true)
+  local success, new_delta, applied_line, applied_text =
+    apply_queue_entry(bufnr, prediction, entry, prediction.accept_queue_delta or 0)
+  if not success then
+    return false
+  end
+
+  prediction.accept_queue_delta = new_delta
+
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  local cursor_line = prediction.window_start + applied_line - 1
+  cursor_line = math.max(1, math.min(cursor_line, line_count))
+  local cursor_col = 0
+  if entry.kind == "deletion" then
+    local ok, line_data = pcall(vim.api.nvim_buf_get_lines, bufnr, cursor_line - 1, cursor_line, false)
+    local line_content = (ok and line_data[1]) or ""
+    local prev_col = prediction.cursor and prediction.cursor[2] or 0
+    cursor_col = math.min(prev_col, #line_content)
+  else
+    cursor_col = #(applied_text or "")
+  end
+
+  vim.api.nvim_win_set_cursor(0, { cursor_line, cursor_col })
+  prediction.cursor = { cursor_line, cursor_col }
+  state.set_prediction(bufnr, prediction)
+  cancel_debounce(bufnr)
+
+  if #prediction.accept_queue == 0 then
+    prediction.accept_queue = nil
+    prediction.accept_queue_delta = nil
+    return finalize_prediction()
+  end
+
+  render.show(bufnr, prediction)
+  return true
+end
+
+--- Clear prediction without leaving insert mode (soft dismiss)
+--- Unlike reject(), this doesn't cancel in-flight requests
+---@param bufnr number
+function M.clear(bufnr)
+  cancel_debounce(bufnr)
+  render.clear(bufnr)
+
+  if vim.g.blink_edit_debug then
+    log.debug("Prediction cleared (soft dismiss)")
+  end
 end
 
 --- Reject the current prediction
