@@ -73,8 +73,10 @@ local log = require("blink-edit.log")
 ---@field selection BlinkEditSelection|nil
 ---@field history_files string[]|nil
 ---@field suppress_next_trigger boolean|nil
+---@field suppress_next_normal_move boolean|nil
 ---@field invalid_response { fingerprint: string, count: number }|nil
 ---@field prefetch BlinkEditPrefetch|nil
+---@field lsp_unsupported_warned table<string, boolean>|nil
 
 ---@type table<number, BlinkEditBufferState>
 local buffers = {}
@@ -147,6 +149,7 @@ local function get_or_create(bufnr)
       history_files = nil,
       suppress_next_trigger = false,
       suppress_next_normal_move = false,
+      lsp_unsupported_warned = {},
       invalid_response = nil,
       prefetch = nil,
     }
@@ -458,6 +461,30 @@ function M.consume_suppress_normal_move(bufnr)
     return true
   end
   return false
+end
+
+-- =============================================================================
+-- LSP Unsupported Method (warn once)
+-- =============================================================================
+
+--- Check if we've already logged an unsupported LSP method for this buffer
+---@param bufnr number
+---@param method string
+---@return boolean
+function M.has_lsp_unsupported_warned(bufnr, method)
+  local state = buffers[bufnr]
+  return state and state.lsp_unsupported_warned and state.lsp_unsupported_warned[method] == true or false
+end
+
+--- Mark an unsupported LSP method as warned for this buffer
+---@param bufnr number
+---@param method string
+function M.mark_lsp_unsupported_warned(bufnr, method)
+  local state = get_or_create(bufnr)
+  if not state.lsp_unsupported_warned then
+    state.lsp_unsupported_warned = {}
+  end
+  state.lsp_unsupported_warned[method] = true
 end
 
 -- =============================================================================

@@ -11,6 +11,7 @@ local M = {}
 local config = require("blink-edit.config")
 local state = require("blink-edit.core.state")
 local utils = require("blink-edit.utils")
+local log = require("blink-edit.log")
 
 -- =============================================================================
 -- Silent LSP Request Helper
@@ -37,6 +38,51 @@ local function silent_lsp_request(bufnr, method, params, timeout_ms)
   vim.lsp.handlers["$/progress"] = old_progress_handler
 
   return results
+end
+
+local function get_attached_clients(bufnr)
+  if vim.lsp.get_clients then
+    return vim.lsp.get_clients({ bufnr = bufnr })
+  end
+
+  local clients = vim.lsp.get_active_clients()
+  if not clients then
+    return {}
+  end
+
+  local attached = {}
+  for _, client in ipairs(clients) do
+    if client.attached_buffers and client.attached_buffers[bufnr] then
+      table.insert(attached, client)
+    end
+  end
+  return attached
+end
+
+local function client_supports_method(client, method)
+  if client.supports_method then
+    return client.supports_method(method)
+  end
+
+  local caps = client.server_capabilities or {}
+  if method == "textDocument/references" then
+    return caps.referencesProvider ~= nil and caps.referencesProvider ~= false
+  end
+  if method == "textDocument/definition" then
+    return caps.definitionProvider ~= nil and caps.definitionProvider ~= false
+  end
+
+  return false
+end
+
+local function buffer_supports_method(bufnr, method)
+  local clients = get_attached_clients(bufnr)
+  for _, client in ipairs(clients) do
+    if client_supports_method(client, method) then
+      return true
+    end
+  end
+  return false
 end
 
 -- =============================================================================
@@ -307,6 +353,16 @@ function M.collect_lsp_locations(
   current_window_start,
   current_window_end
 )
+  if not buffer_supports_method(bufnr, method) then
+    if not state.has_lsp_unsupported_warned(bufnr, method) then
+      state.mark_lsp_unsupported_warned(bufnr, method)
+      if vim.g.blink_edit_debug then
+        log.debug(string.format("LSP does not support %s; skipping for this buffer", method))
+      end
+    end
+    return {}
+  end
+
   local params = vim.lsp.util.make_position_params()
   if method == "textDocument/references" then
     params.context = { includeDeclaration = false }
