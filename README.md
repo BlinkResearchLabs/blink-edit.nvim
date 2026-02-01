@@ -31,7 +31,7 @@
 
 - **Fast:** Written entirely in Lua.
 - **Private:** Bring your own local model (OpenAI-compatible or Ollama).
-- **Simple:** Accept with `<Tab>`, reject with `<Esc>`.
+- **Simple:** Accept with `<Tab>`, reject with `<Esc>` in insert mode.
 
 ---
 
@@ -109,7 +109,7 @@ require("blink-edit").setup({
 
 3. **Control:**
    - `<Tab>` to **Accept** the next hunk
-   - `<C-j>` to **Accept Line** (first line of multi-line hunk)
+   - `<C-j>` to **Accept Line** (line-by-line through visible changes)
    - `<C-]>` to **Clear** (dismiss without leaving insert mode)
    - `<Esc>` to **Reject** and exit insert mode
    - `:BlinkEditStatus` to check server health
@@ -221,13 +221,13 @@ require("blink-edit").setup({
   keymaps = {
     insert = {
       accept = "<Tab>",           -- Accept next hunk
-      accept_line = "<C-j>",      -- Accept first line of multi-line hunk
+      accept_line = "<C-j>",      -- Accept next visible line (line-by-line)
       clear = "<C-]>",            -- Dismiss ghost text (stay in insert mode)
       reject = "<Esc>",           -- Reject and exit insert mode
     },
     normal = {
       accept = "<Tab>",           -- Accept next hunk (when normal_mode.enabled)
-      accept_line = "<C-j>",      -- Accept first line (when normal_mode.enabled)
+      accept_line = "<C-j>",      -- Accept next visible line (when normal_mode.enabled)
     },
   },
 })
@@ -244,7 +244,7 @@ require("blink-edit").setup({
 | Key | Action | Description |
 |-----|--------|-------------|
 | `<Tab>` | **Accept** | Accept the next predicted hunk |
-| `<C-j>` | **Accept Line** | Accept first line of multi-line hunk |
+| `<C-j>` | **Accept Line** | Accept next visible line (line-by-line) |
 | `<C-]>` | **Clear** | Dismiss prediction (stay in insert mode) |
 | `<Esc>` | **Reject** | Reject prediction and exit insert mode |
 
@@ -253,9 +253,11 @@ require("blink-edit").setup({
 | Key | Action | Description |
 |-----|--------|-------------|
 | `<Tab>` | **Accept** | Accept the next predicted hunk |
-| `<C-j>` | **Accept Line** | Accept first line of multi-line hunk |
+| `<C-j>` | **Accept Line** | Accept next visible line (line-by-line) |
 
-> **Note:** `clear` and `reject` are not mapped in normal mode to avoid conflicts with standard Vim keybindings (`<C-]>` is tag jump, `<Esc>` is mode switching).
+> **Note:** Normal mode only maps accept/accept_line; when a prediction is visible, pressing `<Esc>` clears it without adding a persistent mapping.
+
+> **Note:** After you start line-by-line accepts with `<C-j>`, `<Tab>` accepts the remaining visible lines.
 
 > **Note:** If you use `blink.cmp` or `nvim-cmp`, the `<Tab>` keymap automatically checks if the completion menu is visible before accepting predictions.
 
@@ -300,7 +302,7 @@ require("blink-edit").toggle()        -- Toggle predictions
 
 require("blink-edit").trigger()       -- Manually trigger a prediction
 require("blink-edit").accept()        -- Accept next hunk
-require("blink-edit").accept_line()   -- Accept first line of current hunk
+require("blink-edit").accept_line()   -- Accept next visible line (line-by-line)
 require("blink-edit").clear()         -- Clear prediction (stay in insert mode)
 require("blink-edit").reject()        -- Reject prediction
 
@@ -368,7 +370,7 @@ Press `r` to refresh health, `q` or `<Esc>` to close.
 <details>
 <summary><strong>Tab conflicts with completion menu</strong></summary>
 
-We check for blink.cmp/nvim-cmp visibility, but you can change `keymaps.accept` if needed.
+We check for blink.cmp/nvim-cmp visibility, but you can change `keymaps.insert.accept` (and `keymaps.normal.accept` for normal mode) if needed.
 
 </details>
 
