@@ -105,6 +105,13 @@ require("blink-edit").setup({
 })
 ```
 
+> **Model name:** `llm.model` must match an ID returned by your backend (`/v1/models`).
+> Examples:
+> - ✅ `sweepai/sweep-next-edit-1.5B` (if `/v1/models` returns the HF name)
+> - ✅ `/home/.../sweep-next-edit-1.5b.q8_0.v2.gguf` (llama.cpp can expose the full path)
+> - ✅ `sweep` (if you served an alias like `--served-model-name sweep`)
+> - ❌ `sweep` when `/v1/models` only exposes the full path
+
 2. **Start typing** in Insert mode. Predictions will appear as ghost text.
 
 3. **Control:**
